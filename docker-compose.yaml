@@ -1,0 +1,182 @@
+version: '3'
+
+# Set proxy to filter paths not hostnames to be re-usable without needing cnames in DNS
+# User must export key from Parity, map it to external storage, or something
+# PC should either include the docker and nvidia script actions or clone and execute them
+# Possibly include a stratum proxy
+# https://github.com/slush0/stratum-mining-proxy
+# need to set parity author elsewhere, env file maybe
+# add traefik scrape config for grafana
+# looks at prometheus job configs via docker dns
+# add dashboards to grafana
+
+services:
+  traefik:
+    container_name: traefik
+    image: traefik:1.3.1
+    restart: always
+    command: ["traefik", "--web", "--docker", "--docker.domain=docker.localhost", "--web.metrics", "--web.metrics.prometheus", "--logLevel=DEBUG" ,"--configFile=/conf/traefik.toml"]
+    labels:
+      - "traefik.enable=true"
+      - "traefik.backend=traefik"
+      - "traefik.port=8080"
+      - "traefik.frontend.rule=PathPrefix:/dashboard,/api,/health"
+    networks:
+      - proxy-tier
+    ports:
+      - "80:80"
+    expose:
+      - 8080/tcp
+    volumes:
+      - /etc/localtime:/etc/localtime:ro
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+      - traefik-conf:/conf
+      - traefik-certs:/etc/ssl/certs/deployed
+
+# 100% complete, but due to portainer weirdness you must use a trailing slash on the URL
+  portainer:
+    container_name: portainer
+    image: portainer/portainer
+    restart: always
+    labels:
+      - "traefik.enable=true"
+      - "traefik.port=9000"
+      - "traefik.backend=portainer"
+      - "traefik.frontend.rule=PathPrefixStrip: /portainer"
+    volumes:
+      - /etc/localtime:/etc/localtime:ro
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+      - portainer-data:/data
+    expose:
+      - 9000/tcp
+    networks:
+      - proxy-tier
+
+# Monitoring containers
+  prometheus:
+    container_name: prometheus
+    image: prom/prometheus
+    restart: always
+    labels:
+      - "traefik.enable=false"
+    volumes:
+      - /etc/localtime:/etc/localtime:ro
+      - prom-conf:/etc/prometheus
+    expose:
+      - 9090/tcp
+    ports:
+      - 9090:9090
+    networks:
+      - monitoring
+    depends_on:
+      - cadvisor
+
+  cadvisor:
+    container_name: cadvisor
+    image: cultclassik/cadvisor
+    build: ./cadvisor
+    restart: always
+    labels:
+      - "traefik.enable=false"
+    volumes:
+      - /etc/localtime:/etc/localtime:ro
+      - /:/rootfs:ro
+      - /var/run:/var/run:rw
+      - /sys:/sys:ro
+      - /var/lib/docker/:/var/lib/docker:ro
+    expose:
+      - "8080/tcp"
+    networks:
+      - monitoring
+
+  node-exporter:
+    container_name: node-exporter
+    image: prom/node-exporter
+    restart: always
+    labels:
+      - "traefik.enable=false"
+    volumes:
+      - /etc/localtime:/etc/localtime:ro
+      - /proc:/host/proc:ro
+      - /sys:/host/sys:ro
+      - /:/rootfs:ro
+    command: '-collector.procfs=/host/proc -collector.sysfs=/host/sys -collector.filesystem.ignored-mount-points="^(/rootfs|/host|)/(sys|proc|dev|host|etc)($$|/)" collector.filesystem.ignored-fs-types="^(sys|proc|auto|cgroup|devpts|ns|au|fuse\.lxc|mqueue)(fs|)$$"'
+    expose:
+      - 9100
+    networks:
+      - monitoring
+
+  grafana:
+    container_name: grafana
+    hostname: grafana
+    image: grafana/grafana
+    restart: always
+    environment:
+      GF_SERVER_ROOT_URL: /grafana
+    labels:
+      - "traefik.enable=true"
+      - "traefik.port=3000"
+      - "traefik.backend=grafana"
+      - "traefik.frontend.rule=PathPrefixStrip: /grafana"
+      - "traefik.passHostHeader=true"
+    depends_on:
+      - prometheus
+    expose:
+      - "3000/tcp"
+    ports:
+      - "3000:3000/tcp"
+    volumes:
+      - /etc/localtime:/etc/localtime:ro
+      - grafana-db:/var/lib/grafana
+      - grafana-conf:/etc/grafana
+    env_file:
+      - config.monitoring
+    networks:
+      - proxy-tier
+      - monitoring
+
+#  parity-wallet:
+#    container_name: parity-wallet
+#    hostname: wallet
+#    image: parity/parity:stable
+#    restart: always
+#    deploy:
+#      resources:
+#        limits:
+#          memory: 600M
+#    expose:
+#      - "8180"
+#      - "8545"
+#      - "30303"
+#    volumes:
+#      - /etc/localtime:/etc/localtime:ro
+    # Blockchain storage
+#      - parity-ethereum:/root/.local/share/io.parity.ethereum
+    # Database storage
+#      - parity-chains:/root/.local/share/io.parity.ethereum/chains
+    # Private key storage (your account key)
+#      - parity-keys:/root/.local/share/io.parity.ethereum/keys
+#    labels:
+#      - "traefik.port=8180"
+#      - "traefik.backend=parity-wallet"
+#      - "traefik.frontend.rule=PathPrefixStrip: /wallet"
+#    networks:
+#      - proxy-tier
+#    entrypoint: ["/parity/parity", "--jsonrpc-interface", "all", "--jsonrpc-hosts", "all", "--dapps-interface", "0.0.0.0", "--dapps-hosts", "all", "--ui-interface", "0.0.0.0", "--ui-no-validation", "--author", "0x96Ae82E89FF22B3EFF481e2499948c562354CB23"]
+
+volumes:
+  traefik-conf:
+  traefik-certs:
+  prom-conf:
+  grafana-db:
+  grafana-conf:
+  portainer-data:
+  parity-ethereum:
+  parity-chains:
+  parity-keys:
+
+networks:
+  proxy-tier:
+    driver: bridge
+  monitoring:
+    driver: bridge

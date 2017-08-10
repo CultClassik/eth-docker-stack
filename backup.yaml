@@ -1,0 +1,50 @@
+version: '2'
+
+# Set proxy to filter paths not hostnames to be re-usable without needing cnames in DNS
+# User must export key from Parity, map it to external storage, or something
+# PC should either include the docker and nvidia script actions or clone and execute them
+# Possibly include a stratum proxy
+  # https://github.com/slush0/stratum-mining-proxy
+
+services:
+
+  # Used for local wallet, do not expose directly to the internet.
+  parity-wallet:
+    container_name: parity-wallet
+    image: parity/parity:stable
+    restart: always
+    mem_limit: 800m
+    expose:
+      - "8180"
+      - "8545"
+      - "30303"
+    volumes:
+      - /etc/localtime:/etc/localtime:ro
+      # Blockchain storage
+      - /mnt/storage/ethereum:/root/.local/share/io.parity.ethereum
+      # Database storage
+      - /mnt/storage/ethereum/chains:/root/.local/share/io.parity.ethereum/chains
+      # Private key storage (your account key)
+      - /mnt/secure/ethereum:/root/.local/share/io.parity.ethereum/keys
+    labels:
+      - "traefik.port=8180"
+      - "traefik.backend=parity-wallet"
+      - "traefik.frontend.rule=Host:parity.diehlabs.lan"
+    networks:
+      - proxy
+    entrypoint: ["/parity/parity", "--jsonrpc-interface", "all", "--jsonrpc-hosts", "all", "--dapps-interface", "0.0.0.0", "--dapps-hosts", "all", "--ui-interface", "0.0.0.0", "--ui-no-validation", "--author", "0x96Ae82E89FF22B3EFF481e2499948c562354CB23"]
+
+
+    # Custom code in this one to manage everything and provide a front end menu (possibly create in separate container)
+    #minerwatch:
+
+    # nvidia gpu containers, will be scaled to number of gpus by the minerwatch containers
+    #nvworker:
+
+
+networks:
+  proxy:
+    driver: bridge
+
+  monitoring:
+    driver: bridge
